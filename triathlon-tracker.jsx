@@ -1,0 +1,1717 @@
+import React, { useState, useEffect, useMemo, useCallback } from "react";
+import {
+  Home, Calendar, Activity, BarChart3, Trophy, History, Settings as SettingsIcon,
+  Plus, X, Edit2, Trash2, ChevronLeft, ChevronRight, Check, AlertTriangle,
+  Copy, Upload, Search, Footprints, Bike as BikeIcon, Waves, Dumbbell, Wind,
+  Flame, Moon, Link2, Menu, Star, GripVertical, Save, ArrowRight, TrendingUp,
+} from "lucide-react";
+import {
+  ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis,
+  CartesianGrid, Tooltip, Legend,
+} from "recharts";
+import Papa from "papaparse";
+
+/* ============================== CONSTANTS ============================== */
+
+const STORAGE_KEY = "triathlon-app-state-v1";
+const DAY_LABELS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+const SPORTS = {
+  run: { label: "Run", short: "RUN", icon: Footprints, text: "text-orange-400", bg: "bg-orange-500", border: "border-orange-500", soft: "bg-orange-500/10" },
+  bike: { label: "Bike", short: "BIKE", icon: BikeIcon, text: "text-sky-400", bg: "bg-sky-500", border: "border-sky-500", soft: "bg-sky-500/10" },
+  swim: { label: "Swim", short: "SWIM", icon: Waves, text: "text-cyan-400", bg: "bg-cyan-500", border: "border-cyan-500", soft: "bg-cyan-500/10" },
+  strength: { label: "Strength", short: "STR", icon: Dumbbell, text: "text-violet-400", bg: "bg-violet-500", border: "border-violet-500", soft: "bg-violet-500/10" },
+  mobility: { label: "Mobility", short: "MOB", icon: Wind, text: "text-emerald-400", bg: "bg-emerald-500", border: "border-emerald-500", soft: "bg-emerald-500/10" },
+  hyrox: { label: "HYROX", short: "HYROX", icon: Flame, text: "text-rose-400", bg: "bg-rose-500", border: "border-rose-500", soft: "bg-rose-500/10" },
+  rest: { label: "Rest", short: "REST", icon: Moon, text: "text-slate-400", bg: "bg-slate-500", border: "border-slate-600", soft: "bg-slate-500/10" },
+};
+const SPORT_LIST = ["run", "bike", "swim", "strength", "mobility", "hyrox", "rest"];
+const ENDURANCE_SPORTS = ["run", "bike", "swim"];
+
+const INTENSITIES = ["Recovery", "Easy", "Aerobic", "Tempo", "Threshold", "VO2 Max", "Race Pace", "Hard"];
+const ZONES = ["Zone 1", "Zone 2", "Zone 3", "Zone 4", "Zone 5"];
+const PRIORITIES = [
+  { id: "key", label: "Key session" },
+  { id: "normal", label: "Normal session" },
+  { id: "recovery", label: "Recovery session" },
+];
+const STATUSES = [
+  { id: "planned", label: "Planned" },
+  { id: "completed", label: "Completed" },
+  { id: "partial", label: "Partially completed" },
+  { id: "missed", label: "Missed" },
+  { id: "moved", label: "Moved" },
+  { id: "cancelled", label: "Cancelled" },
+];
+const PHASES = ["Base", "Build", "Peak", "Taper", "Race", "Recovery"];
+const RACE_TYPES = ["Sprint Triathlon", "Olympic Triathlon", "Half Ironman / 70.3", "Ironman", "Running Race", "HYROX", "Other"];
+
+const DEFAULT_TEMPLATE = [
+  { sessions: [{ sport: "swim", name: "Swim", duration: 45 }, { sport: "strength", name: "Strength", duration: 45 }] },
+  { sessions: [{ sport: "run", name: "Threshold Run", duration: 50, intensity: "Threshold" }, { sport: "bike", name: "Bike", duration: 60 }] },
+  { sessions: [{ sport: "bike", name: "Bike", duration: 75 }, { sport: "run", name: "Run", duration: 40 }] },
+  { sessions: [{ sport: "bike", name: "Bike", duration: 60 }, { sport: "swim", name: "Swim", duration: 45 }] },
+  { sessions: [{ sport: "run", name: "Run", duration: 40 }, { sport: "swim", name: "Swim", duration: 30 }] },
+  { sessions: [{ sport: "bike", name: "Long Ride", duration: 120 }, { sport: "run", name: "Run", duration: 30 }] },
+  { sessions: [{ sport: "run", name: "Long Run", duration: 70 }, { sport: "swim", name: "Swim", duration: 40 }] },
+];
+
+const DEFAULT_SETTINGS = {
+  ftp: 280,
+  thresholdPace: "4:45",
+  runHrZones: [
+    { zone: 1, label: "Recovery", min: 0, max: 135 },
+    { zone: 2, label: "Aerobic", min: 136, max: 150 },
+    { zone: 3, label: "Tempo", min: 151, max: 163 },
+    { zone: 4, label: "Threshold", min: 164, max: 172 },
+    { zone: 5, label: "VO2 Max", min: 173, max: 200 },
+  ],
+  bikePowerZones: [
+    { zone: 1, label: "Recovery", min: 0, max: 154 },
+    { zone: 2, label: "Endurance", min: 155, max: 210 },
+    { zone: 3, label: "Tempo", min: 211, max: 252 },
+    { zone: 4, label: "Threshold", min: 253, max: 294 },
+    { zone: 5, label: "VO2 Max", min: 295, max: 350 },
+  ],
+  swimPaceZones: [
+    { zone: 1, label: "Easy", pace: "2:10" },
+    { zone: 2, label: "Aerobic", pace: "1:55" },
+    { zone: 3, label: "Threshold", pace: "1:40" },
+  ],
+  template: DEFAULT_TEMPLATE,
+};
+
+/* ============================== UTILITIES ============================== */
+
+function uid() {
+  return (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+}
+function pad(n) { return n.toString().padStart(2, "0"); }
+function toISO(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
+function parseISO(s) { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); }
+function addDays(d, n) { const nd = new Date(d); nd.setDate(nd.getDate() + n); return nd; }
+function getMonday(d) { const nd = new Date(d); const day = nd.getDay(); const diff = day === 0 ? -6 : 1 - day; return addDays(nd, diff); }
+function weekStartISO(dateISO) { return toISO(getMonday(parseISO(dateISO))); }
+function todayISO() { return toISO(new Date()); }
+function daysUntil(dateISO) {
+  const t = new Date(); t.setHours(0, 0, 0, 0);
+  return Math.round((parseISO(dateISO) - t) / 86400000);
+}
+function formatDateLong(dateISO) {
+  return parseISO(dateISO).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+}
+function formatDateShort(dateISO) {
+  return parseISO(dateISO).toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+}
+function fmtDuration(min) {
+  if (min == null || isNaN(min) || min === "") return "—";
+  const total = Math.round(min);
+  const h = Math.floor(total / 60), m = total % 60;
+  if (h > 0) return `${h}h${m > 0 ? " " + m + "m" : ""}`;
+  return `${m}m`;
+}
+function fmtDistance(km) {
+  if (km == null || isNaN(km) || km === "") return "—";
+  return `${km < 10 ? Number(km).toFixed(2) : Number(km).toFixed(1)} km`;
+}
+function num(v) { const n = parseFloat(v); return isNaN(n) ? null : n; }
+function paceToDecimal(str) {
+  if (!str) return null;
+  const [m, s] = String(str).split(":").map(Number);
+  if (isNaN(m)) return null;
+  return m + (s || 0) / 60;
+}
+function decimalToPace(dec) {
+  if (dec == null || isNaN(dec)) return "—";
+  const m = Math.floor(dec); const s = Math.round((dec - m) * 60);
+  return `${m}:${pad(s)}/km`;
+}
+
+/* Empty session factory */
+function newSession(dateISO, overrides = {}) {
+  return {
+    id: uid(),
+    date: dateISO,
+    time: "",
+    sport: "run",
+    name: "",
+    duration: null,
+    distance: null,
+    description: "",
+    notes: "",
+    intensity: "Easy",
+    zone: null,
+    targetPace: "",
+    targetHR: "",
+    targetPower: "",
+    targetCadence: "",
+    priority: "normal",
+    status: "planned",
+    originalDate: null,
+    moved: false,
+    isBrick: false,
+    linkedActivityId: null,
+    ...overrides,
+  };
+}
+
+function generateWeekSessions(weekStart, template) {
+  const sessions = [];
+  template.forEach((day, idx) => {
+    day.sessions.forEach((s) => {
+      sessions.push(newSession(toISO(addDays(parseISO(weekStart), idx)), {
+        sport: s.sport,
+        name: s.name,
+        duration: s.duration || null,
+        distance: s.distance || null,
+        intensity: s.intensity || "Easy",
+        priority: s.priority || "normal",
+      }));
+    });
+  });
+  return sessions;
+}
+
+function ensureWeek(data, weekStart) {
+  if (!data.weeks[weekStart]) {
+    data.weeks[weekStart] = {
+      startDate: weekStart,
+      phase: "Base",
+      notes: "",
+      sessions: generateWeekSessions(weekStart, data.settings.template),
+    };
+  }
+  return data.weeks[weekStart];
+}
+
+function findSessionById(data, id) {
+  for (const w of Object.values(data.weeks)) {
+    const s = w.sessions.find((s) => s.id === id);
+    if (s) return s;
+  }
+  return null;
+}
+
+function sessionAdherence(session, activity) {
+  if (!activity) return { distPct: null, durPct: null, pct: null, label: "Not completed" };
+  const distPct = session.distance && activity.distance ? Math.round((activity.distance / session.distance) * 100) : null;
+  const durPct = session.duration && activity.duration ? Math.round((activity.duration / session.duration) * 100) : null;
+  const pcts = [distPct, durPct].filter((v) => v != null);
+  const pct = pcts.length ? Math.round(pcts.reduce((a, b) => a + b, 0) / pcts.length) : null;
+  let label = "Completed";
+  if (pct != null) {
+    if (pct >= 95 && pct <= 108) label = "Excellent";
+    else if (pct >= 80) label = "Good";
+    else if (pct >= 50) label = "Partial";
+    else label = "Well short";
+  }
+  return { distPct, durPct, pct, label };
+}
+
+function linkActivityToSession(data, sessionId, activityId) {
+  const session = findSessionById(data, sessionId);
+  const activity = data.activities.find((a) => a.id === activityId);
+  if (!session || !activity) return;
+  session.linkedActivityId = activity.id;
+  activity.matchedSessionId = session.id;
+  const { pct } = sessionAdherence(session, activity);
+  session.status = pct != null && pct < 60 ? "partial" : "completed";
+}
+
+function unlinkSession(data, sessionId) {
+  const session = findSessionById(data, sessionId);
+  if (!session) return;
+  if (session.linkedActivityId) {
+    const activity = data.activities.find((a) => a.id === session.linkedActivityId);
+    if (activity) activity.matchedSessionId = null;
+  }
+  session.linkedActivityId = null;
+  session.status = "planned";
+}
+
+function autoMatchActivity(data, activity) {
+  let best = null, bestScore = Infinity;
+  for (const w of Object.values(data.weeks)) {
+    for (const s of w.sessions) {
+      if (s.linkedActivityId) continue;
+      if (s.sport !== activity.sport) continue;
+      const dayDiff = Math.abs((parseISO(s.date) - parseISO(activity.date)) / 86400000);
+      if (dayDiff > 1) continue;
+      let score = dayDiff * 10;
+      if (s.distance && activity.distance) score += Math.abs(s.distance - activity.distance) * 5;
+      else if (s.duration && activity.duration) score += Math.abs(s.duration - activity.duration) / 5;
+      else score += 50;
+      if (score < bestScore) { bestScore = score; best = s; }
+    }
+  }
+  if (best) linkActivityToSession(data, best.id, activity.id);
+  return best;
+}
+
+function weekSummary(week, activitiesById) {
+  const summary = { planned: 0, completed: 0, missed: 0, moved: 0, plannedHours: 0, completedHours: 0, bySport: {} };
+  SPORT_LIST.forEach((sp) => (summary.bySport[sp] = { plannedDist: 0, completedDist: 0, plannedCount: 0, completedCount: 0 }));
+  const today = todayISO();
+  week.sessions.forEach((s) => {
+    if (s.status === "cancelled") return;
+    summary.planned++;
+    if (s.moved) summary.moved++;
+    const activity = s.linkedActivityId ? activitiesById[s.linkedActivityId] : null;
+    summary.bySport[s.sport].plannedCount++;
+    summary.bySport[s.sport].plannedDist += s.distance || 0;
+    if (activity) {
+      summary.completed++;
+      summary.bySport[s.sport].completedCount++;
+      summary.bySport[s.sport].completedDist += activity.distance || 0;
+      summary.completedHours += (activity.duration || 0) / 60;
+    } else if (s.date < today) {
+      summary.missed++;
+    }
+    summary.plannedHours += (s.duration || 0) / 60;
+  });
+  summary.adherence = summary.planned ? Math.round((summary.completed / summary.planned) * 100) : 0;
+  return summary;
+}
+
+function activitiesById(data) {
+  return Object.fromEntries(data.activities.map((a) => [a.id, a]));
+}
+
+function initData() {
+  const d = { settings: JSON.parse(JSON.stringify(DEFAULT_SETTINGS)), races: [], weeks: {}, activities: [] };
+  ensureWeek(d, toISO(getMonday(new Date())));
+  return d;
+}
+
+/* ============================== CSV IMPORT ============================== */
+
+function normalizeHeader(h) { return String(h).toLowerCase().replace(/[^a-z0-9]/g, ""); }
+
+function toMinutes(t) {
+  if (t == null || t === "") return null;
+  if (typeof t === "number") return t / 60;
+  const parts = String(t).split(":").map(Number);
+  if (parts.some(isNaN)) return num(t);
+  if (parts.length === 3) return parts[0] * 60 + parts[1] + parts[2] / 60;
+  if (parts.length === 2) return parts[0] + parts[1] / 60;
+  return null;
+}
+
+function parseCsvRow(row) {
+  const map = {};
+  Object.keys(row).forEach((k) => (map[normalizeHeader(k)] = row[k]));
+  const get = (...keys) => { for (const k of keys) { if (map[k] !== undefined && map[k] !== "") return map[k]; } return undefined; };
+  let date = get("date", "activitydate");
+  if (date && date.includes(" ")) date = date.split(" ")[0];
+  if (date && date.includes("/")) {
+    const p = date.split("/");
+    if (p.length === 3) date = p[2].length === 4 ? `${p[2]}-${pad(+p[1])}-${pad(+p[0])}` : date;
+  }
+  const typeRaw = (get("activitytype", "type", "sport") || "").toLowerCase();
+  let sport = "run";
+  if (typeRaw.includes("cycl") || typeRaw.includes("bik")) sport = "bike";
+  else if (typeRaw.includes("swim")) sport = "swim";
+  else if (typeRaw.includes("strength")) sport = "strength";
+  else if (typeRaw.includes("yoga") || typeRaw.includes("mobil") || typeRaw.includes("stretch")) sport = "mobility";
+  else if (typeRaw.includes("hyrox")) sport = "hyrox";
+  else if (typeRaw.includes("run")) sport = "run";
+  const distRaw = get("distance");
+  const timeRaw = get("time", "movingtime", "duration", "elapsedtime");
+  return {
+    id: uid(),
+    date: date || todayISO(),
+    time: "",
+    sport,
+    name: get("title", "activityname", "name") || `${sport.charAt(0).toUpperCase()}${sport.slice(1)}`,
+    duration: toMinutes(timeRaw),
+    distance: distRaw ? num(distRaw) : null,
+    avgHr: num(get("avghr", "avgheartrate", "averageheartrate")),
+    maxHr: num(get("maxhr", "maxheartrate")),
+    power: num(get("avgpower", "averagepower")),
+    normPower: num(get("normalizedpower", "normpower")),
+    cadence: num(get("avgcadence", "averagecadence", "avgrunningcadence")),
+    elevation: num(get("elevationgain", "totalascent", "elevation")),
+    calories: num(get("calories")),
+    notes: "",
+    source: "garmin",
+    matchedSessionId: null,
+  };
+}
+
+function isDuplicateActivity(data, candidate) {
+  return data.activities.some((a) =>
+    a.date === candidate.date &&
+    a.sport === candidate.sport &&
+    Math.abs((a.distance || 0) - (candidate.distance || 0)) < 0.05 &&
+    Math.abs((a.duration || 0) - (candidate.duration || 0)) < 1
+  );
+}
+
+/* ============================== SMALL UI PARTS ============================== */
+
+function SportIcon({ sport, className = "w-4 h-4" }) {
+  const Icon = (SPORTS[sport] || SPORTS.rest).icon;
+  return <Icon className={className} />;
+}
+
+function StatusBadge({ status }) {
+  const map = {
+    planned: "bg-slate-800 text-slate-300 border border-slate-700",
+    completed: "bg-teal-500/15 text-teal-300 border border-teal-700",
+    partial: "bg-amber-500/15 text-amber-300 border border-amber-700",
+    missed: "bg-rose-500/15 text-rose-300 border border-rose-700",
+    moved: "bg-violet-500/15 text-violet-300 border border-violet-700",
+    cancelled: "bg-slate-800 text-slate-500 border border-slate-700 line-through",
+  };
+  const labels = { planned: "Planned", completed: "Completed", partial: "Partial", missed: "Missed", moved: "Moved", cancelled: "Cancelled" };
+  return <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium tracking-wide ${map[status] || map.planned}`}>{labels[status] || status}</span>;
+}
+
+function Field({ label, children }) {
+  return (
+    <label className="block">
+      <span className="block text-xs font-medium text-slate-400 mb-1">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+const inputCls = "w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-teal-600 focus:border-teal-600";
+const selectCls = inputCls + " appearance-none";
+const btnPrimary = "bg-teal-500 hover:bg-teal-400 text-slate-950 font-semibold px-4 py-2 rounded-lg text-sm transition-colors";
+const btnGhost = "bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-lg text-sm transition-colors border border-slate-700";
+const btnDanger = "text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 px-3 py-2 rounded-lg text-sm transition-colors";
+
+function Modal({ title, onClose, children, wide }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 bg-slate-950/70 backdrop-blur-sm" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className={`bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full ${wide ? "max-w-2xl" : "max-w-md"} max-h-[90vh] overflow-y-auto`}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800 sticky top-0 bg-slate-900 rounded-t-2xl">
+          <h3 className="font-semibold text-slate-100">{title}</h3>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-200 p-1 rounded-lg hover:bg-slate-800">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-5">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================== SESSION MODAL ============================== */
+
+function SessionModal({ initial, onSave, onDelete, onClose }) {
+  const [s, setS] = useState(initial);
+  const set = (k, v) => setS((prev) => ({ ...prev, [k]: v }));
+  const Icon = (SPORTS[s.sport] || SPORTS.run).icon;
+  return (
+    <Modal title={initial.id && initial._existing ? "Edit session" : "New session"} onClose={onClose} wide>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Sport">
+            <select className={selectCls} value={s.sport} onChange={(e) => set("sport", e.target.value)}>
+              {SPORT_LIST.map((sp) => <option key={sp} value={sp}>{SPORTS[sp].label}</option>)}
+            </select>
+          </Field>
+          <Field label="Session name">
+            <input className={inputCls} value={s.name} onChange={(e) => set("name", e.target.value)} placeholder="e.g. Threshold Run" />
+          </Field>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="Date">
+            <input type="date" className={inputCls} value={s.date} onChange={(e) => set("date", e.target.value)} />
+          </Field>
+          <Field label="Start time">
+            <input type="time" className={inputCls} value={s.time || ""} onChange={(e) => set("time", e.target.value)} />
+          </Field>
+          <Field label="Duration (min)">
+            <input type="number" className={inputCls} value={s.duration ?? ""} onChange={(e) => set("duration", num(e.target.value))} placeholder="45" />
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Distance (km)">
+            <input type="number" step="0.01" className={inputCls} value={s.distance ?? ""} onChange={(e) => set("distance", num(e.target.value))} placeholder="10" />
+          </Field>
+          <Field label="Priority">
+            <select className={selectCls} value={s.priority} onChange={(e) => set("priority", e.target.value)}>
+              {PRIORITIES.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+            </select>
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Intensity">
+            <select className={selectCls} value={s.intensity} onChange={(e) => set("intensity", e.target.value)}>
+              {INTENSITIES.map((i) => <option key={i} value={i}>{i}</option>)}
+            </select>
+          </Field>
+          <Field label="Training zone">
+            <select className={selectCls} value={s.zone || ""} onChange={(e) => set("zone", e.target.value || null)}>
+              <option value="">—</option>
+              {ZONES.map((z) => <option key={z} value={z}>{z}</option>)}
+            </select>
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Field label="Target pace"><input className={inputCls} value={s.targetPace || ""} onChange={(e) => set("targetPace", e.target.value)} placeholder="4:45/km" /></Field>
+          <Field label="Target HR"><input className={inputCls} value={s.targetHR || ""} onChange={(e) => set("targetHR", e.target.value)} placeholder="155 bpm" /></Field>
+          <Field label="Target power"><input className={inputCls} value={s.targetPower || ""} onChange={(e) => set("targetPower", e.target.value)} placeholder="250 W" /></Field>
+          <Field label="Target cadence"><input className={inputCls} value={s.targetCadence || ""} onChange={(e) => set("targetCadence", e.target.value)} placeholder="90 rpm" /></Field>
+        </div>
+        <Field label="Workout / structure">
+          <textarea className={inputCls} rows={3} value={s.description} onChange={(e) => set("description", e.target.value)} placeholder="2km warm-up, 5x1km @ 4:35/km w/ 2min recovery, 2km cool-down" />
+        </Field>
+        <Field label="Notes">
+          <textarea className={inputCls} rows={2} value={s.notes} onChange={(e) => set("notes", e.target.value)} placeholder="Legs felt heavy..." />
+        </Field>
+        <div className="grid grid-cols-2 gap-3 items-end">
+          <Field label="Status">
+            <select className={selectCls} value={s.status} onChange={(e) => set("status", e.target.value)}>
+              {STATUSES.map((st) => <option key={st.id} value={st.id}>{st.label}</option>)}
+            </select>
+          </Field>
+          <label className="flex items-center gap-2 text-sm text-slate-300 pb-2">
+            <input type="checkbox" checked={!!s.isBrick} onChange={(e) => set("isBrick", e.target.checked)} className="rounded accent-teal-500" />
+            Part of a brick session
+          </label>
+        </div>
+        <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+          <div>
+            {initial._existing && (
+              <button className={btnDanger} onClick={() => onDelete(s.id)}>
+                <Trash2 className="w-4 h-4 inline mr-1" /> Delete
+              </button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button className={btnGhost} onClick={onClose}>Cancel</button>
+            <button className={btnPrimary} onClick={() => onSave(s)}>
+              <span className="inline-flex items-center gap-1"><Save className="w-4 h-4" /> Save session</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ============================== ACTIVITY MODAL ============================== */
+
+function ActivityModal({ initial, onSave, onDelete, onClose }) {
+  const [a, setA] = useState(initial);
+  const set = (k, v) => setA((prev) => ({ ...prev, [k]: v }));
+  return (
+    <Modal title={initial._existing ? "Edit activity" : "Log activity"} onClose={onClose} wide>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Sport">
+            <select className={selectCls} value={a.sport} onChange={(e) => set("sport", e.target.value)}>
+              {SPORT_LIST.filter((s) => s !== "rest").map((sp) => <option key={sp} value={sp}>{SPORTS[sp].label}</option>)}
+            </select>
+          </Field>
+          <Field label="Activity name">
+            <input className={inputCls} value={a.name} onChange={(e) => set("name", e.target.value)} placeholder="Morning run" />
+          </Field>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="Date"><input type="date" className={inputCls} value={a.date} onChange={(e) => set("date", e.target.value)} /></Field>
+          <Field label="Duration (min)"><input type="number" className={inputCls} value={a.duration ?? ""} onChange={(e) => set("duration", num(e.target.value))} /></Field>
+          <Field label="Distance (km)"><input type="number" step="0.01" className={inputCls} value={a.distance ?? ""} onChange={(e) => set("distance", num(e.target.value))} /></Field>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Field label="Avg HR"><input type="number" className={inputCls} value={a.avgHr ?? ""} onChange={(e) => set("avgHr", num(e.target.value))} /></Field>
+          <Field label="Max HR"><input type="number" className={inputCls} value={a.maxHr ?? ""} onChange={(e) => set("maxHr", num(e.target.value))} /></Field>
+          <Field label="Avg power (W)"><input type="number" className={inputCls} value={a.power ?? ""} onChange={(e) => set("power", num(e.target.value))} /></Field>
+          <Field label="Cadence"><input type="number" className={inputCls} value={a.cadence ?? ""} onChange={(e) => set("cadence", num(e.target.value))} /></Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Elevation gain (m)"><input type="number" className={inputCls} value={a.elevation ?? ""} onChange={(e) => set("elevation", num(e.target.value))} /></Field>
+          <Field label="Calories"><input type="number" className={inputCls} value={a.calories ?? ""} onChange={(e) => set("calories", num(e.target.value))} /></Field>
+        </div>
+        <Field label="Notes"><textarea className={inputCls} rows={2} value={a.notes} onChange={(e) => set("notes", e.target.value)} /></Field>
+        <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+          <div>
+            {initial._existing && (
+              <button className={btnDanger} onClick={() => onDelete(a.id)}>
+                <Trash2 className="w-4 h-4 inline mr-1" /> Delete
+              </button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button className={btnGhost} onClick={onClose}>Cancel</button>
+            <button className={btnPrimary} onClick={() => onSave(a)}>Save activity</button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ============================== RACE MODAL ============================== */
+
+function RaceModal({ initial, onSave, onDelete, onClose }) {
+  const [r, setR] = useState(initial);
+  const set = (k, v) => setR((prev) => ({ ...prev, [k]: v }));
+  return (
+    <Modal title={initial._existing ? "Edit race" : "New race"} onClose={onClose}>
+      <div className="space-y-4">
+        <Field label="Race name"><input className={inputCls} value={r.name} onChange={(e) => set("name", e.target.value)} placeholder="Mossel Bay Half Ironman" /></Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Race date"><input type="date" className={inputCls} value={r.date} onChange={(e) => set("date", e.target.value)} /></Field>
+          <Field label="Race type">
+            <select className={selectCls} value={r.type} onChange={(e) => set("type", e.target.value)}>
+              {RACE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Distance"><input className={inputCls} value={r.distance || ""} onChange={(e) => set("distance", e.target.value)} placeholder="70.3 mi" /></Field>
+          <Field label="Goal time"><input className={inputCls} value={r.goalTime || ""} onChange={(e) => set("goalTime", e.target.value)} placeholder="4:30:00" /></Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Goal pace"><input className={inputCls} value={r.goalPace || ""} onChange={(e) => set("goalPace", e.target.value)} placeholder="4:45/km" /></Field>
+          <Field label="Goal power"><input className={inputCls} value={r.goalPower || ""} onChange={(e) => set("goalPower", e.target.value)} placeholder="250 W" /></Field>
+        </div>
+        <Field label="Notes"><textarea className={inputCls} rows={2} value={r.notes || ""} onChange={(e) => set("notes", e.target.value)} /></Field>
+        <label className="flex items-center gap-2 text-sm text-slate-300">
+          <input type="checkbox" checked={!!r.primary} onChange={(e) => set("primary", e.target.checked)} className="rounded accent-teal-500" />
+          Set as primary race
+        </label>
+        <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+          <div>{initial._existing && <button className={btnDanger} onClick={() => onDelete(r.id)}><Trash2 className="w-4 h-4 inline mr-1" /> Delete</button>}</div>
+          <div className="flex gap-2">
+            <button className={btnGhost} onClick={onClose}>Cancel</button>
+            <button className={btnPrimary} onClick={() => onSave(r)}>Save race</button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ============================== SESSION CARD ============================== */
+
+function SessionCard({ session, activity, onClick, draggable, onDragStart }) {
+  const sport = SPORTS[session.sport] || SPORTS.rest;
+  const adherence = activity ? sessionAdherence(session, activity) : null;
+  return (
+    <div
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onClick={onClick}
+      className={`group cursor-pointer rounded-lg border-l-[3px] ${sport.border} bg-slate-900 hover:bg-slate-800/80 border border-slate-800 border-l-[3px] px-2.5 py-2 mb-1.5 transition-colors`}
+    >
+      <div className="flex items-center justify-between gap-1">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <SportIcon sport={session.sport} className={`w-3.5 h-3.5 shrink-0 ${sport.text}`} />
+          <span className="text-xs font-semibold text-slate-100 truncate">{session.name || sport.label}</span>
+          {session.priority === "key" && <Star className="w-3 h-3 text-amber-400 shrink-0" fill="currentColor" />}
+        </div>
+        <GripVertical className="w-3.5 h-3.5 text-slate-700 group-hover:text-slate-500 shrink-0" />
+      </div>
+      <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-500">
+        {session.time && <span>{session.time}</span>}
+        {session.distance && <span>{fmtDistance(session.distance)}</span>}
+        {session.duration && <span>{fmtDuration(session.duration)}</span>}
+      </div>
+      <div className="flex items-center justify-between mt-1.5">
+        <StatusBadge status={session.status} />
+        {adherence && adherence.pct != null && (
+          <span className="text-[10px] text-slate-500">{adherence.pct}%</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============================== WEEK VIEW ============================== */
+
+function WeekView({ data, weekStart, onOpenSession, onNewSession, onMoveSession, readOnly }) {
+  const week = data.weeks[weekStart];
+  const byId = activitiesById(data);
+  const [dragId, setDragId] = useState(null);
+  if (!week) return null;
+  const summary = weekSummary(week, byId);
+
+  return (
+    <div>
+      <div className="grid grid-cols-1 md:grid-cols-7 gap-2">
+        {DAY_LABELS.map((label, idx) => {
+          const dateISO = toISO(addDays(parseISO(weekStart), idx));
+          const daySessions = week.sessions.filter((s) => s.date === dateISO).sort((a, b) => (a.time || "99:99").localeCompare(b.time || "99:99"));
+          const isToday = dateISO === todayISO();
+          return (
+            <div
+              key={idx}
+              onDragOver={(e) => !readOnly && e.preventDefault()}
+              onDrop={(e) => { if (readOnly) return; e.preventDefault(); if (dragId) { onMoveSession(dragId, dateISO); setDragId(null); } }}
+              className={`rounded-xl border ${isToday ? "border-teal-700 bg-teal-500/5" : "border-slate-800 bg-slate-900/40"} p-2 min-h-[140px] flex flex-col`}
+            >
+              <div className="flex items-center justify-between mb-1.5 px-1">
+                <div>
+                  <div className={`text-xs font-semibold ${isToday ? "text-teal-300" : "text-slate-300"}`}>{label}</div>
+                  <div className="text-[10px] text-slate-600">{formatDateShort(dateISO)}</div>
+                </div>
+                {!readOnly && (
+                  <button onClick={() => onNewSession(dateISO)} className="text-slate-600 hover:text-teal-400 p-1 rounded hover:bg-slate-800">
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+              <div className="flex-1">
+                {daySessions.length === 0 && <div className="text-[11px] text-slate-700 px-1 py-2">Rest day</div>}
+                {daySessions.map((s) => (
+                  <SessionCard
+                    key={s.id}
+                    session={s}
+                    activity={s.linkedActivityId ? byId[s.linkedActivityId] : null}
+                    draggable={!readOnly}
+                    onDragStart={() => setDragId(s.id)}
+                    onClick={() => onOpenSession(s)}
+                  />
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-4 bg-slate-900/60 border border-slate-800 rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-sm font-semibold text-slate-200">Weekly summary</h4>
+          <span className="text-sm font-bold text-teal-400">{summary.adherence}% adherence</span>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+          <SummaryStat label="Sessions" value={`${summary.completed}/${summary.planned}`} />
+          <SummaryStat label="Missed" value={summary.missed} warn={summary.missed > 0} />
+          <SummaryStat label="Moved" value={summary.moved} />
+          <SummaryStat label="Hours" value={`${summary.completedHours.toFixed(1)}/${summary.plannedHours.toFixed(1)}`} />
+        </div>
+        <div className="grid grid-cols-3 md:grid-cols-6 gap-2 mt-4">
+          {SPORT_LIST.filter((s) => s !== "rest").map((sp) => {
+            const b = summary.bySport[sp];
+            if (!b.plannedCount && !b.completedCount) return null;
+            const pct = b.plannedDist ? Math.round((b.completedDist / b.plannedDist) * 100) : (b.plannedCount ? Math.round((b.completedCount / b.plannedCount) * 100) : 0);
+            return (
+              <div key={sp} className="bg-slate-900 border border-slate-800 rounded-lg p-2 text-center">
+                <div className={`text-[10px] font-bold tracking-wide ${SPORTS[sp].text}`}>{SPORTS[sp].short}</div>
+                <div className="text-xs text-slate-300 mt-1">{b.plannedDist ? `${fmtDistance(b.completedDist)}/${fmtDistance(b.plannedDist)}` : `${b.completedCount}/${b.plannedCount}`}</div>
+                <div className="text-[11px] text-slate-500">{pct}%</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SummaryStat({ label, value, warn }) {
+  return (
+    <div>
+      <div className={`text-lg font-bold ${warn ? "text-rose-400" : "text-slate-100"}`}>{value}</div>
+      <div className="text-[11px] text-slate-500">{label}</div>
+    </div>
+  );
+}
+
+/* ============================== WEEK NAV ============================== */
+
+function WeekNav({ weekStart, onChange, phase, onPhaseChange, onDuplicate, readOnly }) {
+  const weekEnd = toISO(addDays(parseISO(weekStart), 6));
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+      <div className="flex items-center gap-2">
+        <button onClick={() => onChange(toISO(addDays(parseISO(weekStart), -7)))} className="p-2 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300">
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        <div className="text-center min-w-[180px]">
+          <div className="text-sm font-semibold text-slate-100">{formatDateShort(weekStart)} – {formatDateShort(weekEnd)}</div>
+          <button onClick={() => onChange(toISO(getMonday(new Date())))} className="text-[11px] text-teal-400 hover:underline">Jump to current week</button>
+        </div>
+        <button onClick={() => onChange(toISO(addDays(parseISO(weekStart), 7)))} className="p-2 rounded-lg bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-300">
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      </div>
+      {!readOnly && (
+        <div className="flex items-center gap-2">
+          <select value={phase} onChange={(e) => onPhaseChange(e.target.value)} className="bg-slate-900 border border-slate-800 rounded-lg px-2 py-1.5 text-xs text-slate-300">
+            {PHASES.map((p) => <option key={p} value={p}>{p}</option>)}
+          </select>
+          <button onClick={onDuplicate} className={btnGhost}><Copy className="w-3.5 h-3.5 inline mr-1" />Duplicate week</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================== DASHBOARD ============================== */
+
+function computeLoadTrend(data) {
+  const today = new Date();
+  function sumHours(fromDay, toDay) {
+    return data.activities.reduce((sum, a) => {
+      const days = (today - parseISO(a.date)) / 86400000;
+      return days >= fromDay && days < toDay ? sum + (a.duration || 0) / 60 : sum;
+    }, 0);
+  }
+  const last7 = sumHours(0, 7), prev7 = sumHours(7, 14);
+  let message = null;
+  if (prev7 > 0.5) {
+    const change = ((last7 - prev7) / prev7) * 100;
+    if (change > 30) message = { text: `Training volume has increased ${Math.round(change)}% compared with your previous week.`, tone: "warn" };
+    else if (change < -40) message = { text: `Training volume has dropped ${Math.round(Math.abs(change))}% compared with your previous week.`, tone: "info" };
+  }
+  return { last7, prev7, message };
+}
+
+function Dashboard({ data, onOpenSession, setActiveTab, setSelectedWeek }) {
+  const currentWeekStart = toISO(getMonday(new Date()));
+  const week = data.weeks[currentWeekStart];
+  const byId = activitiesById(data);
+  const summary = week ? weekSummary(week, byId) : null;
+  const primaryRace = data.races.find((r) => r.primary) || data.races[0];
+  const today = todayISO();
+  const todaySessions = week ? week.sessions.filter((s) => s.date === today) : [];
+  const upcomingKey = Object.values(data.weeks)
+    .flatMap((w) => w.sessions)
+    .filter((s) => s.priority === "key" && s.date >= today && s.status === "planned")
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .slice(0, 4);
+  const recentActivities = [...data.activities].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
+  const nextSession = week ? week.sessions.filter((s) => s.date >= today && s.status === "planned").sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")))[0] : null;
+  const load = computeLoadTrend(data);
+
+  return (
+    <div className="space-y-5">
+      {primaryRace ? (
+        <div className="bg-gradient-to-br from-slate-900 to-slate-900/60 border border-slate-800 rounded-2xl p-5 relative overflow-hidden">
+          <div className="absolute right-0 top-0 h-full w-1.5 bg-teal-500" />
+          <div className="text-[11px] font-semibold text-teal-400 tracking-wide mb-1">Next race</div>
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <div className="text-2xl font-bold text-slate-50">{primaryRace.name}</div>
+              <div className="text-sm text-slate-400 mt-1">{formatDateLong(primaryRace.date)} · {primaryRace.type}</div>
+              {primaryRace.goalTime && <div className="text-sm text-slate-500 mt-1">Goal: {primaryRace.goalTime}</div>}
+            </div>
+            <div className="flex gap-6 text-right">
+              <div>
+                <div className="text-3xl font-bold text-teal-400 tabular-nums">{Math.max(daysUntil(primaryRace.date), 0)}</div>
+                <div className="text-[11px] text-slate-500">days</div>
+              </div>
+              <div>
+                <div className="text-3xl font-bold text-slate-300 tabular-nums">{Math.max(Math.ceil(daysUntil(primaryRace.date) / 7), 0)}</div>
+                <div className="text-[11px] text-slate-500">weeks</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="bg-slate-900 border border-dashed border-slate-700 rounded-2xl p-5 text-center">
+          <p className="text-sm text-slate-400 mb-2">No race set yet.</p>
+          <button onClick={() => setActiveTab("races")} className={btnPrimary}>Add a race</button>
+        </div>
+      )}
+
+      {load.message && (
+        <div className={`flex items-center gap-2 rounded-xl px-4 py-3 text-sm ${load.message.tone === "warn" ? "bg-amber-500/10 border border-amber-800 text-amber-300" : "bg-slate-900 border border-slate-800 text-slate-400"}`}>
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          {load.message.text}
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-semibold text-slate-100">This week{week ? ` · ${week.phase}` : ""}</h3>
+            <button onClick={() => { setSelectedWeek(currentWeekStart); setActiveTab("plan"); }} className="text-xs text-teal-400 hover:underline">Open week →</button>
+          </div>
+          {summary ? (
+            <>
+              <div className="flex items-center gap-4 mb-4">
+                <div className="relative w-16 h-16 shrink-0">
+                  <svg viewBox="0 0 36 36" className="w-16 h-16 -rotate-90">
+                    <circle cx="18" cy="18" r="15.5" fill="none" stroke="#1e293b" strokeWidth="3.5" />
+                    <circle cx="18" cy="18" r="15.5" fill="none" stroke="#2dd4bf" strokeWidth="3.5" strokeDasharray={`${summary.adherence} 100`} strokeLinecap="round" />
+                  </svg>
+                  <div className="absolute inset-0 flex items-center justify-center text-sm font-bold text-slate-100">{summary.adherence}%</div>
+                </div>
+                <div>
+                  <div className="text-lg font-bold text-slate-100">{summary.completed} / {summary.planned} sessions</div>
+                  <div className="text-xs text-slate-500">{summary.completedHours.toFixed(1)}h / {summary.plannedHours.toFixed(1)}h planned</div>
+                </div>
+              </div>
+              <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
+                {SPORT_LIST.filter((s) => s !== "rest").map((sp) => {
+                  const b = summary.bySport[sp];
+                  if (!b.plannedCount) return null;
+                  const pct = b.plannedDist ? Math.round((b.completedDist / b.plannedDist) * 100) : Math.round((b.completedCount / b.plannedCount) * 100);
+                  return (
+                    <div key={sp} className="bg-slate-950 border border-slate-800 rounded-lg p-2 text-center">
+                      <div className={`text-[10px] font-bold ${SPORTS[sp].text}`}>{SPORTS[sp].short}</div>
+                      <div className="text-xs text-slate-300 mt-1">{pct}%</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : <p className="text-sm text-slate-500">No training week yet.</p>}
+        </div>
+
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+          <h3 className="font-semibold text-slate-100 mb-3">Today</h3>
+          {todaySessions.length === 0 && <p className="text-sm text-slate-500">No sessions scheduled.</p>}
+          {todaySessions.map((s) => (
+            <SessionCard key={s.id} session={s} activity={s.linkedActivityId ? byId[s.linkedActivityId] : null} onClick={() => onOpenSession(s)} />
+          ))}
+          {nextSession && nextSession.date !== today && (
+            <div className="mt-3 pt-3 border-t border-slate-800">
+              <div className="text-[11px] text-slate-500 mb-1">Next session — {formatDateShort(nextSession.date)}</div>
+              <SessionCard session={nextSession} activity={null} onClick={() => onOpenSession(nextSession)} />
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+          <h3 className="font-semibold text-slate-100 mb-3 flex items-center gap-2"><Star className="w-4 h-4 text-amber-400" /> Upcoming key sessions</h3>
+          {upcomingKey.length === 0 && <p className="text-sm text-slate-500">None scheduled.</p>}
+          <div className="space-y-2">
+            {upcomingKey.map((s) => (
+              <div key={s.id} onClick={() => onOpenSession(s)} className="cursor-pointer flex items-center justify-between bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 hover:border-slate-700">
+                <div className="flex items-center gap-2">
+                  <SportIcon sport={s.sport} className={`w-4 h-4 ${SPORTS[s.sport].text}`} />
+                  <span className="text-sm text-slate-200">{s.name}</span>
+                </div>
+                <span className="text-xs text-slate-500">{formatDateShort(s.date)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+          <h3 className="font-semibold text-slate-100 mb-3">Recently completed</h3>
+          {recentActivities.length === 0 && <p className="text-sm text-slate-500">No activities logged yet.</p>}
+          <div className="space-y-2">
+            {recentActivities.map((a) => (
+              <div key={a.id} className="flex items-center justify-between bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <SportIcon sport={a.sport} className={`w-4 h-4 ${SPORTS[a.sport].text}`} />
+                  <span className="text-sm text-slate-200">{a.name}</span>
+                </div>
+                <span className="text-xs text-slate-500">{fmtDistance(a.distance)} · {fmtDuration(a.duration)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================== TRAINING PLAN TAB ============================== */
+
+function TrainingPlanTab({ data, weekStart, setWeekStart, onOpenSession, onNewSession, onMoveSession, onSetPhase, onDuplicateWeek }) {
+  const week = data.weeks[weekStart];
+  return (
+    <div>
+      <WeekNav
+        weekStart={weekStart}
+        onChange={setWeekStart}
+        phase={week?.phase || "Base"}
+        onPhaseChange={(p) => onSetPhase(weekStart, p)}
+        onDuplicate={() => onDuplicateWeek(weekStart)}
+      />
+      <WeekView data={data} weekStart={weekStart} onOpenSession={onOpenSession} onNewSession={onNewSession} onMoveSession={onMoveSession} />
+    </div>
+  );
+}
+
+/* ============================== ACTIVITIES TAB ============================== */
+
+function ActivitiesTab({ data, onOpenActivity, onNewActivity, onImport }) {
+  const [filterSport, setFilterSport] = useState("all");
+  const [search, setSearch] = useState("");
+  const list = data.activities
+    .filter((a) => filterSport === "all" || a.sport === filterSport)
+    .filter((a) => !search || a.name.toLowerCase().includes(search.toLowerCase()))
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <Search className="w-4 h-4 text-slate-500 absolute left-2.5 top-2.5" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search activities" className={inputCls + " pl-8 w-52"} />
+          </div>
+          <select value={filterSport} onChange={(e) => setFilterSport(e.target.value)} className={selectCls + " w-auto"}>
+            <option value="all">All sports</option>
+            {SPORT_LIST.filter((s) => s !== "rest").map((sp) => <option key={sp} value={sp}>{SPORTS[sp].label}</option>)}
+          </select>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={onImport} className={btnGhost}><Upload className="w-3.5 h-3.5 inline mr-1" />Import Garmin CSV</button>
+          <button onClick={onNewActivity} className={btnPrimary}><Plus className="w-3.5 h-3.5 inline mr-1" />Log activity</button>
+        </div>
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+        {list.length === 0 && <div className="p-8 text-center text-sm text-slate-500">No activities found.</div>}
+        <div className="divide-y divide-slate-800">
+          {list.map((a) => (
+            <div key={a.id} onClick={() => onOpenActivity(a)} className="flex items-center gap-3 px-4 py-3 hover:bg-slate-800/50 cursor-pointer">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${SPORTS[a.sport].soft}`}>
+                <SportIcon sport={a.sport} className={`w-4 h-4 ${SPORTS[a.sport].text}`} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-slate-100 truncate">{a.name}</span>
+                  {a.matchedSessionId && <Link2 className="w-3 h-3 text-teal-500 shrink-0" />}
+                  {a.source === "garmin" && <span className="text-[10px] bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded shrink-0">Garmin</span>}
+                </div>
+                <div className="text-xs text-slate-500">{formatDateLong(a.date)}</div>
+              </div>
+              <div className="hidden sm:flex gap-4 text-xs text-slate-400 shrink-0">
+                <span>{fmtDistance(a.distance)}</span>
+                <span>{fmtDuration(a.duration)}</span>
+                {a.avgHr && <span>{a.avgHr} bpm</span>}
+                {a.power && <span>{a.power} W</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============================== IMPORT MODAL ============================== */
+
+function ImportModal({ data, onClose, onConfirm }) {
+  const [rows, setRows] = useState(null);
+  const [fileName, setFileName] = useState("");
+
+  function handleFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setFileName(file.name);
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        const parsed = results.data.map(parseCsvRow);
+        setRows(parsed);
+      },
+    });
+  }
+
+  const dupes = rows ? rows.filter((r) => isDuplicateActivity(data, r)).length : 0;
+  const newCount = rows ? rows.length - dupes : 0;
+
+  return (
+    <Modal title="Import Garmin CSV" onClose={onClose} wide>
+      <div className="space-y-4">
+        {!rows && (
+          <div className="border-2 border-dashed border-slate-700 rounded-xl p-10 text-center">
+            <Upload className="w-8 h-8 text-slate-600 mx-auto mb-3" />
+            <p className="text-sm text-slate-400 mb-3">Upload a Garmin activity export (.csv)</p>
+            <label className={btnPrimary + " cursor-pointer inline-block"}>
+              Choose file
+              <input type="file" accept=".csv" onChange={handleFile} className="hidden" />
+            </label>
+          </div>
+        )}
+        {rows && (
+          <>
+            <p className="text-sm text-slate-400">{fileName} — {rows.length} rows found, {newCount} new, {dupes} already imported.</p>
+            <div className="max-h-64 overflow-y-auto border border-slate-800 rounded-lg divide-y divide-slate-800">
+              {rows.map((r, i) => {
+                const dup = isDuplicateActivity(data, r);
+                return (
+                  <div key={i} className={`flex items-center gap-3 px-3 py-2 text-xs ${dup ? "opacity-40" : ""}`}>
+                    <SportIcon sport={r.sport} className={`w-3.5 h-3.5 ${SPORTS[r.sport].text}`} />
+                    <span className="flex-1 truncate text-slate-200">{r.name}</span>
+                    <span className="text-slate-500">{r.date}</span>
+                    <span className="text-slate-500">{fmtDistance(r.distance)}</span>
+                    <span className="text-slate-500">{fmtDuration(r.duration)}</span>
+                    {dup && <span className="text-slate-600">duplicate</span>}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex justify-end gap-2">
+              <button className={btnGhost} onClick={onClose}>Cancel</button>
+              <button className={btnPrimary} onClick={() => onConfirm(rows.filter((r) => !isDuplicateActivity(data, r)))}>
+                Import {newCount} activities
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/* ============================== HISTORY TAB ============================== */
+
+function HistoryTab({ data, onSelectWeek }) {
+  const byId = activitiesById(data);
+  const weeks = Object.keys(data.weeks)
+    .filter((wk) => wk < toISO(getMonday(new Date())))
+    .sort((a, b) => b.localeCompare(a));
+
+  return (
+    <div className="space-y-2">
+      {weeks.length === 0 && <p className="text-sm text-slate-500">No historical weeks yet — they'll appear here once a week is in the past.</p>}
+      {weeks.map((wk) => {
+        const week = data.weeks[wk];
+        const summary = weekSummary(week, byId);
+        return (
+          <div key={wk} onClick={() => onSelectWeek(wk)} className="cursor-pointer flex items-center justify-between bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-xl px-4 py-3">
+            <div>
+              <div className="text-sm font-semibold text-slate-100">{formatDateShort(wk)} – {formatDateShort(toISO(addDays(parseISO(wk), 6)))}</div>
+              <div className="text-xs text-slate-500">{week.phase} · {summary.completed}/{summary.planned} sessions · {summary.completedHours.toFixed(1)}h</div>
+            </div>
+            <div className="text-right">
+              <div className="text-lg font-bold text-teal-400">{summary.adherence}%</div>
+              <div className="text-[11px] text-slate-500">adherence</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ============================== RACES TAB ============================== */
+
+function RacesTab({ data, onOpenRace, onNewRace, onSetPrimary }) {
+  const sorted = [...data.races].sort((a, b) => a.date.localeCompare(b.date));
+  return (
+    <div>
+      <div className="flex justify-end mb-4">
+        <button onClick={onNewRace} className={btnPrimary}><Plus className="w-3.5 h-3.5 inline mr-1" />New race</button>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {sorted.length === 0 && <p className="text-sm text-slate-500">No races yet.</p>}
+        {sorted.map((r) => (
+          <div key={r.id} onClick={() => onOpenRace(r)} className={`cursor-pointer bg-slate-900 border rounded-2xl p-5 relative ${r.primary ? "border-teal-700" : "border-slate-800 hover:border-slate-700"}`}>
+            {r.primary && <span className="absolute top-4 right-4 text-[10px] bg-teal-500/15 text-teal-300 border border-teal-700 px-2 py-0.5 rounded-full">Primary</span>}
+            <div className="text-[11px] text-slate-500 uppercase tracking-wide">{r.type}</div>
+            <div className="text-lg font-bold text-slate-100 mt-1">{r.name}</div>
+            <div className="text-sm text-slate-400 mt-1">{formatDateLong(r.date)}</div>
+            <div className="flex items-center gap-4 mt-3 text-sm">
+              <span className="text-slate-300 font-semibold">{Math.max(daysUntil(r.date), 0)} days</span>
+              {r.goalTime && <span className="text-slate-500">Goal {r.goalTime}</span>}
+            </div>
+            {!r.primary && (
+              <button onClick={(e) => { e.stopPropagation(); onSetPrimary(r.id); }} className="mt-3 text-xs text-teal-400 hover:underline">Set as primary race</button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ============================== ANALYTICS TAB ============================== */
+
+const RANGE_OPTIONS = [
+  { id: "7d", label: "7 days", weeks: 1 },
+  { id: "4w", label: "4 weeks", weeks: 4 },
+  { id: "8w", label: "8 weeks", weeks: 8 },
+  { id: "12w", label: "12 weeks", weeks: 12 },
+  { id: "6m", label: "6 months", weeks: 26 },
+  { id: "1y", label: "1 year", weeks: 52 },
+  { id: "all", label: "All time", weeks: 104 },
+];
+
+function getWeeksList(n) {
+  const weeks = [];
+  const monday = getMonday(new Date());
+  for (let i = 0; i < n; i++) weeks.unshift(toISO(addDays(monday, -7 * i)));
+  return weeks;
+}
+
+function AnalyticsTab({ data }) {
+  const [range, setRange] = useState("8w");
+  const rangeCfg = RANGE_OPTIONS.find((r) => r.id === range);
+  const byId = activitiesById(data);
+
+  const weeklyData = useMemo(() => {
+    const weeks = getWeeksList(rangeCfg.weeks);
+    return weeks.map((wk) => {
+      const week = data.weeks[wk];
+      const plannedHours = week ? week.sessions.reduce((s, x) => s + (x.duration || 0), 0) / 60 : 0;
+      const acts = data.activities.filter((a) => weekStartISO(a.date) === wk);
+      const completedHours = acts.reduce((s, a) => s + (a.duration || 0), 0) / 60;
+      const summary = week ? weekSummary(week, byId) : null;
+      return {
+        week: formatDateShort(wk),
+        Planned: +plannedHours.toFixed(1),
+        Completed: +completedHours.toFixed(1),
+        run: +acts.filter((a) => a.sport === "run").reduce((s, a) => s + (a.distance || 0), 0).toFixed(1),
+        bike: +acts.filter((a) => a.sport === "bike").reduce((s, a) => s + (a.distance || 0), 0).toFixed(1),
+        swim: +acts.filter((a) => a.sport === "swim").reduce((s, a) => s + (a.distance || 0), 0).toFixed(1),
+        adherence: summary ? summary.adherence : 0,
+      };
+    });
+  }, [data, rangeCfg.weeks, byId]);
+
+  const totals = useMemo(() => {
+    const acts = data.activities.filter((a) => getWeeksList(rangeCfg.weeks).includes(weekStartISO(a.date)));
+    return {
+      hours: acts.reduce((s, a) => s + (a.duration || 0), 0) / 60,
+      distance: acts.reduce((s, a) => s + (a.distance || 0), 0),
+      sessions: acts.length,
+      avgAdherence: weeklyData.length ? Math.round(weeklyData.reduce((s, w) => s + w.adherence, 0) / weeklyData.length) : 0,
+    };
+  }, [data, rangeCfg.weeks, weeklyData]);
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap gap-2">
+        {RANGE_OPTIONS.map((r) => (
+          <button key={r.id} onClick={() => setRange(r.id)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${range === r.id ? "bg-teal-500 text-slate-950 border-teal-500" : "bg-slate-900 text-slate-400 border-slate-800 hover:border-slate-700"}`}>
+            {r.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <StatCard label="Total hours" value={totals.hours.toFixed(1)} />
+        <StatCard label="Total distance" value={`${totals.distance.toFixed(0)} km`} />
+        <StatCard label="Activities" value={totals.sessions} />
+        <StatCard label="Avg adherence" value={`${totals.avgAdherence}%`} accent />
+      </div>
+
+      <ChartCard title="Training volume — planned vs completed (hours)">
+        <ResponsiveContainer width="100%" height={260}>
+          <BarChart data={weeklyData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+            <XAxis dataKey="week" stroke="#64748b" fontSize={11} />
+            <YAxis stroke="#64748b" fontSize={11} />
+            <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }} />
+            <Legend wrapperStyle={{ fontSize: 12 }} />
+            <Bar dataKey="Planned" fill="#475569" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="Completed" fill="#2dd4bf" radius={[4, 4, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </ChartCard>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <ChartCard title="Running & swimming distance (km)">
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={weeklyData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <XAxis dataKey="week" stroke="#64748b" fontSize={11} />
+              <YAxis stroke="#64748b" fontSize={11} />
+              <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Line type="monotone" dataKey="run" name="Run" stroke="#fb923c" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="swim" name="Swim" stroke="#22d3ee" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </ChartCard>
+        <ChartCard title="Cycling distance (km)">
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={weeklyData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+              <XAxis dataKey="week" stroke="#64748b" fontSize={11} />
+              <YAxis stroke="#64748b" fontSize={11} />
+              <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }} />
+              <Line type="monotone" dataKey="bike" name="Bike" stroke="#38bdf8" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </ChartCard>
+      </div>
+
+      <ChartCard title="Plan adherence trend (%)">
+        <ResponsiveContainer width="100%" height={220}>
+          <LineChart data={weeklyData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+            <XAxis dataKey="week" stroke="#64748b" fontSize={11} />
+            <YAxis stroke="#64748b" fontSize={11} domain={[0, 100]} />
+            <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }} />
+            <Line type="monotone" dataKey="adherence" name="Adherence %" stroke="#2dd4bf" strokeWidth={2} dot={{ r: 3 }} />
+          </LineChart>
+        </ResponsiveContainer>
+      </ChartCard>
+    </div>
+  );
+}
+
+function StatCard({ label, value, accent }) {
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 text-center">
+      <div className={`text-xl font-bold ${accent ? "text-teal-400" : "text-slate-100"}`}>{value}</div>
+      <div className="text-[11px] text-slate-500 mt-0.5">{label}</div>
+    </div>
+  );
+}
+function ChartCard({ title, children }) {
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <h4 className="text-sm font-semibold text-slate-300 mb-2">{title}</h4>
+      {children}
+    </div>
+  );
+}
+
+/* ============================== SETTINGS TAB ============================== */
+
+function SettingsTab({ data, onSave }) {
+  const [settings, setSettings] = useState(JSON.parse(JSON.stringify(data.settings)));
+  const dirty = JSON.stringify(settings) !== JSON.stringify(data.settings);
+
+  function updateTemplateDay(dayIdx, sessions) {
+    const next = { ...settings, template: settings.template.map((d, i) => (i === dayIdx ? { sessions } : d)) };
+    setSettings(next);
+  }
+  function addTemplateSession(dayIdx) {
+    const sessions = [...settings.template[dayIdx].sessions, { sport: "run", name: "Run", duration: 45 }];
+    updateTemplateDay(dayIdx, sessions);
+  }
+  function removeTemplateSession(dayIdx, sIdx) {
+    updateTemplateDay(dayIdx, settings.template[dayIdx].sessions.filter((_, i) => i !== sIdx));
+  }
+
+  return (
+    <div className="space-y-6 max-w-3xl">
+      <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+        <h3 className="font-semibold text-slate-100 mb-4">Training zones</h3>
+        <div className="grid grid-cols-2 gap-4">
+          <Field label="Cycling FTP (W)">
+            <input type="number" className={inputCls} value={settings.ftp} onChange={(e) => setSettings({ ...settings, ftp: num(e.target.value) })} />
+          </Field>
+          <Field label="Running threshold pace (min/km)">
+            <input className={inputCls} value={settings.thresholdPace} onChange={(e) => setSettings({ ...settings, thresholdPace: e.target.value })} placeholder="4:45" />
+          </Field>
+        </div>
+      </section>
+
+      <section className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+        <h3 className="font-semibold text-slate-100 mb-1">Default weekly template</h3>
+        <p className="text-xs text-slate-500 mb-4">Used when generating new future weeks. Editing this does not change weeks that already exist.</p>
+        <div className="space-y-4">
+          {DAY_LABELS.map((label, dayIdx) => (
+            <div key={dayIdx} className="border border-slate-800 rounded-xl p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium text-slate-300">{label}</span>
+                <button onClick={() => addTemplateSession(dayIdx)} className="text-xs text-teal-400 hover:underline flex items-center gap-1"><Plus className="w-3 h-3" />Add session</button>
+              </div>
+              <div className="space-y-2">
+                {settings.template[dayIdx].sessions.map((s, sIdx) => (
+                  <div key={sIdx} className="flex items-center gap-2">
+                    <select
+                      className={selectCls + " w-32"}
+                      value={s.sport}
+                      onChange={(e) => {
+                        const sessions = [...settings.template[dayIdx].sessions];
+                        sessions[sIdx] = { ...s, sport: e.target.value };
+                        updateTemplateDay(dayIdx, sessions);
+                      }}
+                    >
+                      {SPORT_LIST.map((sp) => <option key={sp} value={sp}>{SPORTS[sp].label}</option>)}
+                    </select>
+                    <input
+                      className={inputCls}
+                      value={s.name}
+                      onChange={(e) => {
+                        const sessions = [...settings.template[dayIdx].sessions];
+                        sessions[sIdx] = { ...s, name: e.target.value };
+                        updateTemplateDay(dayIdx, sessions);
+                      }}
+                    />
+                    <input
+                      type="number"
+                      className={inputCls + " w-24"}
+                      value={s.duration || ""}
+                      placeholder="min"
+                      onChange={(e) => {
+                        const sessions = [...settings.template[dayIdx].sessions];
+                        sessions[sIdx] = { ...s, duration: num(e.target.value) };
+                        updateTemplateDay(dayIdx, sessions);
+                      }}
+                    />
+                    <button onClick={() => removeTemplateSession(dayIdx, sIdx)} className="text-slate-600 hover:text-rose-400 p-1"><X className="w-4 h-4" /></button>
+                  </div>
+                ))}
+                {settings.template[dayIdx].sessions.length === 0 && <div className="text-xs text-slate-600">Rest day</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {dirty && (
+        <div className="sticky bottom-4 flex justify-end">
+          <button onClick={() => onSave(settings)} className={btnPrimary + " shadow-lg"}>Save settings</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================== SESSION DETAIL VIEW (from Dashboard/History click) ============================== */
+
+function SessionDetailPanel({ session, activity, onClose, onEdit }) {
+  const adherence = sessionAdherence(session, activity);
+  const sport = SPORTS[session.sport];
+  return (
+    <Modal title="Session detail" onClose={onClose} wide>
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <SportIcon sport={session.sport} className={`w-5 h-5 ${sport.text}`} />
+            <span className="text-lg font-bold text-slate-100">{session.name}</span>
+          </div>
+          <StatusBadge status={session.status} />
+        </div>
+        <div className="text-sm text-slate-400">{formatDateLong(session.date)}{session.moved && session.originalDate && <span className="text-violet-400"> · moved from {formatDateShort(session.originalDate)}</span>}</div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+            <div className="text-[11px] font-semibold text-slate-500 mb-2">PLANNED</div>
+            <div className="space-y-1 text-sm text-slate-300">
+              <div>{fmtDistance(session.distance)}</div>
+              <div>{fmtDuration(session.duration)}</div>
+              {session.targetPace && <div>Target pace: {session.targetPace}</div>}
+              {session.targetPower && <div>Target power: {session.targetPower}</div>}
+              {session.targetHR && <div>Target HR: {session.targetHR}</div>}
+            </div>
+          </div>
+          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+            <div className="text-[11px] font-semibold text-slate-500 mb-2">COMPLETED</div>
+            {activity ? (
+              <div className="space-y-1 text-sm text-slate-300">
+                <div>{fmtDistance(activity.distance)}</div>
+                <div>{fmtDuration(activity.duration)}</div>
+                {activity.avgHr && <div>Avg HR: {activity.avgHr} bpm</div>}
+                {activity.power && <div>Avg power: {activity.power} W</div>}
+              </div>
+            ) : <div className="text-sm text-slate-600">No linked activity</div>}
+          </div>
+        </div>
+
+        {activity && (
+          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+            <div className="text-[11px] font-semibold text-slate-500 mb-2">PLAN ADHERENCE</div>
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div><div className="text-lg font-bold text-slate-100">{adherence.distPct ?? "—"}%</div><div className="text-[11px] text-slate-500">Distance</div></div>
+              <div><div className="text-lg font-bold text-slate-100">{adherence.durPct ?? "—"}%</div><div className="text-[11px] text-slate-500">Duration</div></div>
+              <div><div className="text-lg font-bold text-teal-400">{adherence.label}</div><div className="text-[11px] text-slate-500">Overall</div></div>
+            </div>
+          </div>
+        )}
+
+        {session.description && (
+          <div>
+            <div className="text-[11px] font-semibold text-slate-500 mb-1">WORKOUT</div>
+            <p className="text-sm text-slate-300 whitespace-pre-line">{session.description}</p>
+          </div>
+        )}
+        {session.notes && (
+          <div>
+            <div className="text-[11px] font-semibold text-slate-500 mb-1">NOTES</div>
+            <p className="text-sm text-slate-400 whitespace-pre-line">{session.notes}</p>
+          </div>
+        )}
+        <div className="flex justify-end gap-2 pt-2 border-t border-slate-800">
+          <button className={btnGhost} onClick={onClose}>Close</button>
+          <button className={btnPrimary} onClick={onEdit}>Edit session</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ============================== MAIN APP ============================== */
+
+const NAV = [
+  { id: "dashboard", label: "Dashboard", icon: Home },
+  { id: "plan", label: "Training Plan", icon: Calendar },
+  { id: "activities", label: "Activities", icon: Activity },
+  { id: "analytics", label: "Analytics", icon: BarChart3 },
+  { id: "races", label: "Races", icon: Trophy },
+  { id: "history", label: "History", icon: History },
+  { id: "settings", label: "Settings", icon: SettingsIcon },
+];
+
+export default function App() {
+  const [data, setData] = useState(null);
+  const [activeTab, setActiveTab] = useState("dashboard");
+  const [weekStart, setWeekStart] = useState(toISO(getMonday(new Date())));
+  const [sessionModal, setSessionModal] = useState(null);
+  const [sessionDetail, setSessionDetail] = useState(null);
+  const [activityModal, setActivityModal] = useState(null);
+  const [raceModal, setRaceModal] = useState(null);
+  const [importOpen, setImportOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [saveState, setSaveState] = useState("idle");
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await window.storage.get(STORAGE_KEY);
+        if (res && res.value) {
+          const parsed = JSON.parse(res.value);
+          ensureWeek(parsed, toISO(getMonday(new Date())));
+          setData(parsed);
+        } else {
+          const init = initData();
+          setData(init);
+          persist(init);
+        }
+      } catch (e) {
+        setData(initData());
+      }
+    })();
+  }, []);
+
+  const persist = useCallback(async (next) => {
+    setSaveState("saving");
+    try {
+      await window.storage.set(STORAGE_KEY, JSON.stringify(next));
+      setSaveState("saved");
+    } catch (e) {
+      setSaveState("error");
+    }
+  }, []);
+
+  const update = useCallback((updater) => {
+    setData((prev) => {
+      const next = updater(JSON.parse(JSON.stringify(prev)));
+      persist(next);
+      return next;
+    });
+  }, [persist]);
+
+  if (!data) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400 text-sm">
+        Loading training data…
+      </div>
+    );
+  }
+
+  const byId = activitiesById(data);
+
+  /* ---- session handlers ---- */
+  function openNewSession(dateISO) {
+    setSessionModal(newSession(dateISO, { _existing: false }));
+  }
+  function openExistingSession(session) {
+    setSessionModal({ ...session, _existing: true });
+  }
+  function saveSession(session) {
+    update((d) => {
+      ensureWeek(d, weekStartISO(session.date));
+      Object.values(d.weeks).forEach((w) => { w.sessions = w.sessions.filter((s) => s.id !== session.id); });
+      const { _existing, ...clean } = session;
+      d.weeks[weekStartISO(session.date)].sessions.push(clean);
+      return d;
+    });
+    setSessionModal(null);
+  }
+  function deleteSession(id) {
+    update((d) => {
+      Object.values(d.weeks).forEach((w) => { w.sessions = w.sessions.filter((s) => s.id !== id); });
+      return d;
+    });
+    setSessionModal(null);
+  }
+  function moveSession(sessionId, newDateISO) {
+    update((d) => {
+      let found = null;
+      for (const w of Object.values(d.weeks)) {
+        const idx = w.sessions.findIndex((s) => s.id === sessionId);
+        if (idx > -1) { found = w.sessions[idx]; w.sessions.splice(idx, 1); break; }
+      }
+      if (!found) return d;
+      if (!found.originalDate) found.originalDate = found.date;
+      found.date = newDateISO;
+      found.moved = found.originalDate !== newDateISO;
+      if (found.status === "planned" && found.moved) found.status = "moved";
+      ensureWeek(d, weekStartISO(newDateISO));
+      d.weeks[weekStartISO(newDateISO)].sessions.push(found);
+      return d;
+    });
+  }
+  function setPhase(wk, phase) {
+    update((d) => { ensureWeek(d, wk); d.weeks[wk].phase = phase; return d; });
+  }
+  function duplicateWeek(sourceWk) {
+    const targetWk = toISO(addDays(parseISO(sourceWk), 7));
+    update((d) => {
+      const src = d.weeks[sourceWk];
+      if (!src) return d;
+      const offset = (parseISO(targetWk) - parseISO(sourceWk)) / 86400000;
+      const cloned = src.sessions.map((s) => ({ ...s, id: uid(), date: toISO(addDays(parseISO(s.date), offset)), status: "planned", linkedActivityId: null, moved: false, originalDate: null }));
+      d.weeks[targetWk] = { startDate: targetWk, phase: src.phase, notes: "", sessions: cloned };
+      return d;
+    });
+    setWeekStart(targetWk);
+  }
+
+  /* ---- activity handlers ---- */
+  function openNewActivity() {
+    setActivityModal({ id: uid(), date: todayISO(), time: "", sport: "run", name: "", duration: null, distance: null, avgHr: null, maxHr: null, power: null, cadence: null, elevation: null, calories: null, notes: "", source: "manual", matchedSessionId: null, _existing: false });
+  }
+  function openExistingActivity(a) { setActivityModal({ ...a, _existing: true }); }
+  function saveActivity(a) {
+    update((d) => {
+      const { _existing, ...clean } = a;
+      const idx = d.activities.findIndex((x) => x.id === clean.id);
+      if (idx > -1) {
+        const prevMatch = d.activities[idx].matchedSessionId;
+        d.activities[idx] = clean;
+        if (prevMatch) linkActivityToSession(d, prevMatch, clean.id);
+      } else {
+        d.activities.push(clean);
+        autoMatchActivity(d, clean);
+      }
+      return d;
+    });
+    setActivityModal(null);
+  }
+  function deleteActivity(id) {
+    update((d) => {
+      const a = d.activities.find((x) => x.id === id);
+      if (a && a.matchedSessionId) unlinkSession(d, a.matchedSessionId);
+      d.activities = d.activities.filter((x) => x.id !== id);
+      return d;
+    });
+    setActivityModal(null);
+  }
+  function confirmImport(rows) {
+    update((d) => {
+      rows.forEach((r) => { d.activities.push(r); autoMatchActivity(d, r); });
+      return d;
+    });
+    setImportOpen(false);
+  }
+
+  /* ---- race handlers ---- */
+  function openNewRace() { setRaceModal({ id: uid(), name: "", date: todayISO(), type: "Half Ironman / 70.3", distance: "", goalTime: "", goalPace: "", goalPower: "", priority: false, notes: "", primary: data.races.length === 0, _existing: false }); }
+  function openExistingRace(r) { setRaceModal({ ...r, _existing: true }); }
+  function saveRace(r) {
+    update((d) => {
+      const { _existing, ...clean } = r;
+      if (clean.primary) d.races.forEach((race) => (race.primary = false));
+      const idx = d.races.findIndex((x) => x.id === clean.id);
+      if (idx > -1) d.races[idx] = clean; else d.races.push(clean);
+      return d;
+    });
+    setRaceModal(null);
+  }
+  function deleteRace(id) {
+    update((d) => { d.races = d.races.filter((r) => r.id !== id); return d; });
+    setRaceModal(null);
+  }
+  function setPrimaryRace(id) {
+    update((d) => { d.races.forEach((r) => (r.primary = r.id === id)); return d; });
+  }
+
+  function saveSettings(settings) {
+    update((d) => { d.settings = settings; return d; });
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex" style={{ fontVariantNumeric: "tabular-nums" }}>
+      {/* Sidebar (desktop) */}
+      <aside className="hidden md:flex flex-col w-56 shrink-0 border-r border-slate-900 bg-slate-950 p-4">
+        <div className="flex items-center gap-2 px-2 mb-6">
+          <div className="w-8 h-8 rounded-lg bg-teal-500 flex items-center justify-center font-bold text-slate-950">T</div>
+          <span className="font-bold text-slate-100 tracking-tight">TriLog</span>
+        </div>
+        <nav className="space-y-1 flex-1">
+          {NAV.map((n) => (
+            <button
+              key={n.id}
+              onClick={() => setActiveTab(n.id)}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === n.id ? "bg-teal-500/15 text-teal-300" : "text-slate-400 hover:bg-slate-900 hover:text-slate-200"}`}
+            >
+              <n.icon className="w-4 h-4" />
+              {n.label}
+            </button>
+          ))}
+        </nav>
+        <div className="text-[10px] text-slate-700 px-2">{saveState === "saving" ? "Saving…" : "All changes saved"}</div>
+      </aside>
+
+      {/* Mobile top bar */}
+      <div className="md:hidden fixed top-0 left-0 right-0 z-40 bg-slate-950 border-b border-slate-900 flex items-center justify-between px-4 py-3">
+        <div className="flex items-center gap-2">
+          <div className="w-7 h-7 rounded-lg bg-teal-500 flex items-center justify-center font-bold text-slate-950 text-sm">T</div>
+          <span className="font-bold text-slate-100">TriLog</span>
+        </div>
+        <span className="text-sm font-medium text-slate-300">{NAV.find((n) => n.id === activeTab)?.label}</span>
+      </div>
+
+      {/* Main content */}
+      <main className="flex-1 min-w-0 p-4 md:p-8 pt-16 md:pt-8 pb-20 md:pb-8">
+        <div className="max-w-6xl mx-auto">
+          <h1 className="hidden md:block text-xl font-bold text-slate-100 mb-6">{NAV.find((n) => n.id === activeTab)?.label}</h1>
+
+          {activeTab === "dashboard" && (
+            <Dashboard data={data} onOpenSession={(s) => setSessionDetail(s)} setActiveTab={setActiveTab} setSelectedWeek={setWeekStart} />
+          )}
+          {activeTab === "plan" && (
+            <TrainingPlanTab
+              data={data}
+              weekStart={weekStart}
+              setWeekStart={(wk) => { update((d) => { ensureWeek(d, wk); return d; }); setWeekStart(wk); }}
+              onOpenSession={(s) => setSessionDetail(s)}
+              onNewSession={openNewSession}
+              onMoveSession={moveSession}
+              onSetPhase={setPhase}
+              onDuplicateWeek={duplicateWeek}
+            />
+          )}
+          {activeTab === "activities" && (
+            <ActivitiesTab data={data} onOpenActivity={openExistingActivity} onNewActivity={openNewActivity} onImport={() => setImportOpen(true)} />
+          )}
+          {activeTab === "analytics" && <AnalyticsTab data={data} />}
+          {activeTab === "races" && <RacesTab data={data} onOpenRace={openExistingRace} onNewRace={openNewRace} onSetPrimary={setPrimaryRace} />}
+          {activeTab === "history" && (
+            <HistoryTab data={data} onSelectWeek={(wk) => { setWeekStart(wk); setActiveTab("plan"); }} />
+          )}
+          {activeTab === "settings" && <SettingsTab data={data} onSave={saveSettings} />}
+        </div>
+      </main>
+
+      {/* Mobile bottom nav */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950 border-t border-slate-900 flex items-center justify-around py-2">
+        {NAV.slice(0, 5).map((n) => (
+          <button key={n.id} onClick={() => setActiveTab(n.id)} className={`flex flex-col items-center gap-0.5 px-2 py-1 ${activeTab === n.id ? "text-teal-400" : "text-slate-500"}`}>
+            <n.icon className="w-5 h-5" />
+            <span className="text-[10px]">{n.label.split(" ")[0]}</span>
+          </button>
+        ))}
+      </nav>
+
+      {/* Modals */}
+      {sessionModal && (
+        <SessionModal initial={sessionModal} onClose={() => setSessionModal(null)} onSave={saveSession} onDelete={deleteSession} />
+      )}
+      {sessionDetail && (
+        <SessionDetailPanel
+          session={sessionDetail}
+          activity={sessionDetail.linkedActivityId ? byId[sessionDetail.linkedActivityId] : null}
+          onClose={() => setSessionDetail(null)}
+          onEdit={() => { openExistingSession(sessionDetail); setSessionDetail(null); }}
+        />
+      )}
+      {activityModal && (
+        <ActivityModal initial={activityModal} onClose={() => setActivityModal(null)} onSave={saveActivity} onDelete={deleteActivity} />
+      )}
+      {raceModal && (
+        <RaceModal initial={raceModal} onClose={() => setRaceModal(null)} onSave={saveRace} onDelete={deleteRace} />
+      )}
+      {importOpen && (
+        <ImportModal data={data} onClose={() => setImportOpen(false)} onConfirm={confirmImport} />
+      )}
+    </div>
+  );
+}
